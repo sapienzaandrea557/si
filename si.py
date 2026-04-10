@@ -2361,13 +2361,20 @@ class FootballPredictor:
             if total_pending > to_show_limit:
                 print(f"\n{Colors.YELLOW}[!] Hai {total_pending} match pendenti.{Colors.ENDC}")
                 try:
-                    p_input = input(f"Mostro i 100 più recenti. Inserisci l'indice di inizio (1-{total_pending}) o premi Invio: ").strip()
-                    if p_input.isdigit():
+                    p_input = input(f"Inserisci indice di inizio, o scrivi 'tutti' per processare TUTTI i {total_pending} match (Lento), o premi Invio (ultimi 100): ").strip().lower()
+                    if p_input == 'tutti':
+                        to_show = pending_matches
+                        start_idx = 0
+                        to_show_limit = total_pending
+                    elif p_input.isdigit():
                         start_idx = max(0, int(p_input) - 1)
+                        to_show = pending_matches[start_idx : start_idx + to_show_limit]
+                    else:
+                        to_show = pending_matches[start_idx : start_idx + to_show_limit]
                 except:
-                    pass
-            
-            to_show = pending_matches[start_idx : start_idx + to_show_limit]
+                    to_show = pending_matches[start_idx : start_idx + to_show_limit]
+            else:
+                to_show = pending_matches[start_idx : start_idx + to_show_limit]
 
         print(f"\n{'='*70}")
         print(f"{'MODALITA REALTA - CONFRONTO PRONOSTICI':^70}")
