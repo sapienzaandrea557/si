@@ -2979,48 +2979,114 @@ class FootballPredictor:
                     }
                     to_analyze.append(hybrid_fix)
             if to_analyze: self.analyze_match_list(to_analyze, "DIRETTA.IT SELECTION")
-    def handle_odds_verification(self):
-        """Gestisce la verifica delle quote professionali"""
-        print(f"\n{Colors.CYAN}--- VERIFICA QUOTE PROFESSIONALI (API + DIRETTA) ---{Colors.ENDC}")
-        print("1. OGGI | 2. DOMANI | 3. RICERCA | 0. TORNA")
-        v_choice = input("Scegli: ").strip().lower()
-        if v_choice == '0': return
+    def handle_interactive_date_analysis(self):
+        """
+        Nuova funzione per scegliere giorni, visualizzare match filtrati e analizzare selettivamente.
+        """
+        print(f"\n{Colors.CYAN}--- ANALISI SELETTIVA PER DATA ---{Colors.ENDC}")
+        print("Scegli i giorni (es: 1,2 per oggi e domani):")
+        print("1. IERI | 2. OGGI | 3. DOMANI | 4. DOPODOMANI | 5. SETTIMANA | 0. TORNA")
+        
+        d_input = input("Scegli: ").strip().lower()
+        if not d_input or d_input == '0': return
+        
+        day_map = {"1": -1, "2": 0, "3": 1, "4": 2}
         offsets = []
-        if v_choice == "1": offsets = [0]
-        elif v_choice == "2": offsets = [1]
-        elif v_choice == "3": offsets = [-1, 0, 1, 2]
-        else: return
-        query = ""
-        if v_choice == "3":
-            query = input("Squadra o campionato: ").strip().lower()
-            if not query: return
-        top_leagues_white = ["italia: serie a", "inghilterra: premier league", "spagna: laliga", "germania: bundesliga", "francia: ligue 1", "europa: champions league"]
-        found_any = False
+        if d_input == '5':
+            offsets = [0, 1, 2, 3, 4, 5, 6]
+        else:
+            for part in d_input.split(','):
+                if part.strip() in day_map:
+                    offsets.append(day_map[part.strip()])
+        
+        if not offsets: return
+        
+        print(f"\n{Colors.BLUE}[...] Recupero match in corso...{Colors.ENDC}")
+        all_matches = []
+        seen_ids = set()
+        
+        # Filtro leghe preferite dell'utente
+        top_leagues = [
+            "italia: serie a", "italia: serie b", 
+            "inghilterra: premier league", "inghilterra: championship",
+            "spagna: laliga", "spagna: laliga2",
+            "germania: bundesliga", "germania: 2. bundesliga",
+            "francia: ligue 1", "francia: ligue 2",
+            "europa: champions league", "europa: europa league", "europa: conference league",
+            "olanda: eredivisie", "portogallo: liga portugal"
+        ]
+        
         for offset in offsets:
-            day_label = ["Ieri", "Oggi", "Domani", "Dopodomani"][offset + 1]
-            matches = self.diretta.get_matches(day_offset=offset)
-            filtered = []
-            for m in matches:
-                if v_choice in ["1", "2"]:
-                    if any(m['league'].lower().startswith(tl) for tl in top_leagues_white): filtered.append(m)
-                elif v_choice == "3":
-                    if query in m['home'].lower() or query in m['away'].lower() or query in m['league'].lower(): filtered.append(m)
-            if filtered:
-                found_any = True
-                print(f"[{Colors.BOLD}{day_label}{Colors.ENDC}]")
-                for m in filtered:
-                    odds_res = None
-                    fake_f = {"teams": {"home": {"name": m['home']}, "away": {"name": m['away']}}, "league": {"name": m['league']}, "fixture": {"id": None, "date": datetime.fromtimestamp(m['time'], tz=timezone.utc).isoformat()}}
-                    api_match = self.find_api_sports_fixture(fake_f)
-                    if api_match:
-                        api_odds = self.get_odds(api_match['fixture']['id'])
-                        if api_odds and api_odds.get("1X2"):
-                            o = api_odds["1X2"]
-                            odds_res = {"1": o.get("Home", 0), "X": o.get("Draw", 0), "2": o.get("Away", 0)}
-                    if not odds_res: odds_res = self.diretta.get_odds(m['id'])
-                    o_str = f"{Colors.GREEN}1:{odds_res['1']} X:{odds_res['X']} 2:{odds_res['2']}{Colors.ENDC}" if odds_res else f"{Colors.RED}N/D{Colors.ENDC}"
-                    print(f" - {m['league'][:15]:<15} | {m['home']:<20} vs {m['away']:<20} | {o_str}")
-        if not found_any: print(f"\n{Colors.YELLOW}[!] Nessun match trovato.{Colors.ENDC}")
+            day_matches = self.diretta.get_matches(day_offset=offset)
+            for m in day_matches:
+                m_id = m['id']
+                if m_id not in seen_ids:
+                    # Priorità ai campionati top
+                    is_top = any(m['league'].lower().startswith(tl) for tl in top_leagues)
+                    m['is_top'] = is_top
+                    all_matches.append(m)
+                    seen_ids.add(m_id)
+        
+        # Ordiniamo: prima i top leagues, poi il resto
+        all_matches.sort(key=lambda x: (not x['is_top'], x['league'], x['time']))
+        
+        if not all_matches:
+            print(f"{Colors.RED}[!] Nessun match trovato per le date selezionate.{Colors.ENDC}")
+            return
+
+        print(f"\n{Colors.BOLD}--- LISTA MATCH DISPONIBILI ({len(all_matches)}) ---{Colors.ENDC}")
+        print(f"{'ID':<4} | {'CAMPIONATO':<20} | {'PARTITA':<45} | {'DATA'}")
+        print("-" * 85)
+        
+        for i, m in enumerate(all_matches[:150]): # Mostriamo max 150 per leggibilità
+            dt = datetime.fromtimestamp(m['time'], tz=timezone.utc).strftime('%d/%m %H:%M')
+            color = Colors.GREEN if m['is_top'] else ""
+            reset = Colors.ENDC if m['is_top'] else ""
+            print(f"{i+1:3d}. | {color}{m['league'][:20]:<20}{reset} | {color}{m['home']:<20} vs {m['away']:<20}{reset} | {dt}")
+
+        print(f"\n{Colors.CYAN}Opzioni: 'tutti', 'top' (solo verdi), oppure numeri separati da virgola (es: 1,5,12).{Colors.ENDC}")
+        sel = input("Scegli: ").strip().lower()
+        
+        selected_matches = []
+        if sel == 'tutti':
+            selected_matches = all_matches[:50] # Cap di sicurezza
+        elif sel == 'top':
+            selected_matches = [m for m in all_matches if m['is_top']][:50]
+        elif sel:
+            for part in sel.split(','):
+                try:
+                    idx = int(part.strip()) - 1
+                    if 0 <= idx < len(all_matches):
+                        selected_matches.append(all_matches[idx])
+                except: continue
+        
+        if not selected_matches:
+            print("Operazione annullata.")
+            return
+            
+        print(f"\n{Colors.GREEN}[!] Analisi avviata per {len(selected_matches)} match...{Colors.ENDC}")
+        to_analyze = []
+        for sm in selected_matches:
+            # Creiamo il formato fixture richiesto dal motore
+            fake_f = {
+                "teams": {"home": {"name": sm['home']}, "away": {"name": sm['away']}},
+                "league": {"name": sm['league']},
+                "fixture": {"id": sm['id'], "date": datetime.fromtimestamp(sm['time'], tz=timezone.utc).isoformat(), "status": "NS"}
+            }
+            # Cerchiamo se esiste su API-Sports per dati più ricchi, altrimenti usiamo dati ibridi
+            api_match = self.find_api_sports_fixture(fake_f)
+            if api_match:
+                to_analyze.append(api_match)
+            else:
+                hybrid_fix = {
+                    "fixture": {"id": f"d_{sm['id']}", "date": fake_f["fixture"]["date"], "status": "NS"},
+                    "league": {"name": sm['league'], "id": 0},
+                    "teams": {"home": {"name": sm['home'], "id": f"csv_{sm['home']}"}, "away": {"name": sm['away'], "id": f"csv_{sm['away']}"}}
+                }
+                to_analyze.append(hybrid_fix)
+        
+        if to_analyze:
+            self.analyze_match_list(to_analyze, f"SELEZIONE UTENTE ({len(to_analyze)} MATCH)")
 if __name__ == "__main__":
     # Token Football-Data.org (Attivo e Funzionante)
     FD_KEY = "39df5a49a6764a999a9b14cafc9ca111"
@@ -3048,90 +3114,52 @@ if __name__ == "__main__":
     print(f"Sistemi: {' | '.join(status_msg)}")
     
     while True:
-        print(f"\n{Colors.BOLD}{Colors.CYAN}--- MENU PRINCIPALE ---{Colors.ENDC}")
-        print("1. PREF | 2. RICERCA | 3. DIRETTA | 4. GEST. PREF | 5. UTILITY | 6. TOP PRONOSTICI | 9. ROUTINE | 10. REALTÀ | 11. AUTO-LEARN | 4.4 FUTURI | 0. ESCI")
-        raw_input = input("Scegli: ").strip().lower()
+        print(f"\n{Colors.BOLD}{Colors.CYAN}--- SMART BRAIN AI: FOOTBALL PREDICTOR PRO ---{Colors.ENDC}")
+        print(f"{Colors.GREEN}1. ANALISI MATCH (Selettiva/Data){Colors.ENDC} | {Colors.YELLOW}2. CERCA SQUADRA/MATCH{Colors.ENDC}")
+        print(f"{Colors.BLUE}3. REALTÀ & AUTO-LEARN{Colors.ENDC}         | {Colors.PURPLE}4. TOP PRONOSTICI & ROUTINE{Colors.ENDC}")
+        print(f"5. UTILITY & DB (UK)             | 0. ESCI")
+        
+        raw_input = input("\nScegli: ").strip().lower()
         if not raw_input or raw_input == "0" or raw_input == "exit": break
+        
         choices = [c.strip() for c in raw_input.split(',')]
         for main_choice in choices:
             if main_choice == "1":
-                p.handle_quick_league_menu()
+                p.handle_interactive_date_analysis()
             elif main_choice == "2":
                 print(f"\n{Colors.BLUE}--- RICERCA & ANALISI ---{Colors.ENDC}")
-                print("1. SQUADRA | 2. MATCH | 3. DOMANI | 4. LISTA ESPN | 5. INTELLIGENTE | t. TUTTO | 0. TORNA")
-                r_choices = input("Scegli: ").strip().lower().split(',')
-                for rc in r_choices:
-                    if rc == '1':
-                        team = input("Nome squadra: ").strip()
-                        if team: p.analyze_team_matches(team)
-                    elif rc == '2':
-                        q = input("Cerca match (es: 'Inter Milan' o 'Roma'): ").strip()
-                        if q:
-                            m = p.find_match_anywhere(q)
-                            if not m:
-                                m = p.search_matches_intelligent(q, day_offsets=[-1, 0, 1, 2])
-                            if m:
-                                p._interactive_pick_and_analyze(m, title=f"RISULTATI PER: {q}")
-                    elif rc == '3': p.analyze_tomorrow()
-                    elif rc == '4': p.analyze_all_matches()
-                    elif rc == '5':
-                        print("1. IERI | 2. OGGI | 3. DOMANI | 4. DOPODOMANI | t. TUTTI")
-                        dsel = input("Giorni: ").strip().lower()
-                        day_map = {"1": -1, "2": 0, "3": 1, "4": 2}
-                        offsets = [-1, 0, 1, 2] if dsel == 't' else []
-                        if not offsets:
-                            for part in dsel.split(','):
-                                if part.strip() in day_map:
-                                    offsets.append(day_map[part.strip()])
-                        if not offsets:
-                            offsets = [0, 1]
-                        q = input("Cerca (1 squadra o 2 squadre, es: 'Roma' oppure 'Roma, Milan'): ").strip()
-                        if q:
-                            fx = p.search_matches_intelligent(q, day_offsets=offsets)
-                            p._interactive_pick_and_analyze(fx, title=f"INTELLIGENTE: {q}")
-                    elif rc == 't':
-                        p.analyze_tomorrow()
-                        p.analyze_all_matches()
+                print("1. SQUADRA | 2. MATCH SINGOLO | 3. LISTA ESPN (Tutti) | 0. TORNA")
+                rc = input("Scegli: ").strip().lower()
+                if rc == '1':
+                    team = input("Nome squadra: ").strip()
+                    if team: p.analyze_team_matches(team)
+                elif rc == '2':
+                    q = input("Cerca match (es: 'Inter Milan'): ").strip()
+                    if q:
+                        m = p.find_match_anywhere(q)
+                        if not m: m = p.search_matches_intelligent(q, day_offsets=[-1, 0, 1, 2])
+                        if m: p._interactive_pick_and_analyze(m, title=f"RISULTATI PER: {q}")
+                elif rc == '3':
+                    p.analyze_all_matches()
             elif main_choice == "3":
-                print(f"\n{Colors.YELLOW}--- DIRETTA & LIVE ---{Colors.ENDC}")
-                print("1. DIRETTA.IT | 2. QUOTE | 3. AUTO-LEARN | t. TUTTO | 0. TORNA")
-                d_choices = input("Scegli: ").strip().lower().split(',')
-                for dc in d_choices:
-                    if dc == '1': p.handle_diretta_menu()
-                    elif dc == '2': p.handle_odds_verification()
-                    elif dc == '3': p.run_auto_learning()
-                    elif dc == 't':
-                        p.handle_diretta_menu()
-                        p.run_auto_learning()
+                print(f"\n{Colors.YELLOW}--- AI & REALTÀ ---{Colors.ENDC}")
+                print("1. MOSTRA REALTÀ (Risultati) | 2. AUTO-LEARN (Background) | 0. TORNA")
+                ac = input("Scegli: ").strip().lower()
+                if ac == '1': p.show_reality()
+                elif ac == '2': p.run_auto_learning(manual=True)
             elif main_choice == "4":
-                p.handle_favorites_management()
+                print(f"\n{Colors.PURPLE}--- TOP & ROUTINE ---{Colors.ENDC}")
+                print("1. SALVA TOP PRONOSTICI | 2. ESEGUI ROUTINE COMPLETA (9) | 0. TORNA")
+                tc = input("Scegli: ").strip().lower()
+                if tc == '1': p.save_top_pronostici()
+                elif tc == '2': p.run_champion_routine()
             elif main_choice == "5":
-                print(f"\n{Colors.CYAN}--- UTILITY & STORICO ---{Colors.ENDC}")
-                print("1. ANALISI STORICA | 2. MOSTRA REALTÀ | 3. PULIZIA CACHE | 4. FUTURI | 5. AGGIORNA DB UK | t. TUTTO | 0. TORNA")
-                u_choices = input("Scegli: ").strip().lower().split(',')
-                for uc in u_choices:
-                    if uc == '1':
-                        days = input("Giorni indietro: ").strip()
-                        if days.isdigit(): p.analyze_past_days(int(days))
-                    elif uc == '2': p.show_reality()
-                    elif uc == '3': p.clean_cache(days=1)
-                    elif uc == '4': p.analyze_csv_future_matches()
-                    elif uc == '5': p.update_all_csv_databases()
-                    elif uc == 't':
-                        p.show_reality()
-                        p.analyze_csv_future_matches()
-                        p.update_all_csv_databases()
-            elif main_choice == "6":
-                p.save_top_pronostici()
-            elif main_choice == "9":
-                p.run_champion_routine()
-            elif main_choice == "10":
-                p.show_reality()
-            elif main_choice == "11":
-                p.run_auto_learning(manual=True)
-            elif main_choice == "4.4":
-                p.analyze_csv_future_matches()
-            elif main_choice in ["serie a", "a"]: p.analyze_league("serie_a")
-            elif main_choice in ["champions", "cl"]: p.analyze_league("champions_league")
-            elif main_choice == "domani": p.analyze_tomorrow()
+                print(f"\n{Colors.CYAN}--- UTILITY & DB ---{Colors.ENDC}")
+                print("1. AGGIORNA DB UK (CSV) | 2. PULIZIA CACHE | 3. ANALISI STORICA | 0. TORNA")
+                uc = input("Scegli: ").strip().lower()
+                if uc == '1': p.update_all_csv_databases()
+                elif uc == '2': p.clean_cache(days=1)
+                elif uc == '3':
+                    days = input("Giorni indietro: ").strip()
+                    if days.isdigit(): p.analyze_past_days(int(days))
         print("\n" + "-"*30)
