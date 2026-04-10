@@ -6840,15 +6840,15 @@
     {
         "fid": "d_QLtzs8Ar",
         "m": "Roma vs Pisa",
-        "r_pred": "1X",
+        "r_pred": "OVER 1.5",
         "date": "2026-04-10",
         "processed": false,
         "h_id": "csv_Roma",
         "a_id": "csv_Pisa",
-        "exp_h": 1.4249999999999998,
-        "exp_a": 0.9500000000000001,
-        "hs": 70.68636363636364,
-        "as": 48.94375
+        "exp_h": 1.6,
+        "exp_a": 0.75,
+        "hs": 89.57222222222222,
+        "as": 53.42407407407407
     },
     {
         "fid": "d_bXXrqrDa",
