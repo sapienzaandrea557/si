@@ -24,9 +24,34 @@ class Colors:
     YELLOW = '\033[93m'
     RED = '\033[91m'
     PURPLE = '\033[95m'
+    WHITE = '\033[97m'
+    ORANGE = '\033[38;5;208m'
+    GRAY = '\033[90m'
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+    @staticmethod
+    def print_header(text):
+        print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{text.center(60)}{Colors.ENDC}")
+        print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
+
+    @staticmethod
+    def print_success(text):
+        print(f"{Colors.GREEN}[V] {text}{Colors.ENDC}")
+
+    @staticmethod
+    def print_error(text):
+        print(f"{Colors.RED}[!] {text}{Colors.ENDC}")
+
+    @staticmethod
+    def print_info(text):
+        print(f"{Colors.CYAN}[i] {text}{Colors.ENDC}")
+
+    @staticmethod
+    def print_warning(text):
+        print(f"{Colors.YELLOW}[!] {text}{Colors.ENDC}")
 class DirettaScraper:
     """Scraper per recuperare match e quote da Diretta.it (Flashscore)"""
     def __init__(self):
@@ -281,6 +306,13 @@ class FootballPredictor:
             94: "PPL", # Liga Portugal
             137: "EL"  # Europa League (if available in FD.org)
         }
+        self.league_weights = {
+            135: {"uo": 0.45, "gg": 0.52, "rho": -0.05}, # Serie A: più tattica
+            39: {"uo": 0.58, "gg": 0.55, "rho": -0.03},  # Premier: molti gol
+            140: {"uo": 0.50, "gg": 0.50, "rho": -0.04}, # La Liga
+            78: {"uo": 0.62, "gg": 0.58, "rho": -0.02},  # Bundesliga: spettacolo
+            136: {"uo": 0.40, "gg": 0.45, "rho": -0.06}, # Serie B: pochi gol
+        }
         self.team_aliases = {
             "roma": {"id": 497, "name": "AS Roma", "league": 135},
             "pisa": {"id": 506, "name": "Pisa", "league": 136},
@@ -309,6 +341,15 @@ class FootballPredictor:
             "benfica": {"id": 211, "name": "Benfica", "league": 94},
             "sporting": {"id": 228, "name": "Sporting CP", "league": 94}
         }
+    def _print_progress_bar(self, iteration, total, prefix='', suffix='', length=40, fill='█'):
+        """Stampa una barra di progresso personalizzata"""
+        percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+        filled_length = int(length * iteration // total)
+        bar = fill * filled_length + '-' * (length - filled_length)
+        print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
+        if iteration == total: 
+            print()
+
     def _safe_read_json(self, file_path):
         """Lettura sicura di file JSON con blocco globale e caching per history.json"""
         # Se è history.json, usiamo la cache in memoria se è stata letta negli ultimi 30 secondi
@@ -409,9 +450,15 @@ class FootballPredictor:
             print(f"Cache pulita: rimosse {initial_count - len(self.cache)} voci obsolete.")
             self._save_cache(force=True)
     def _log_error(self, message):
-        """Logga gli errori su un file dedicato"""
+        """Logga gli errori su un file dedicato con rotazione automatica"""
+        log_file = "errors.log"
         try:
-            with open("errors.log", "a", encoding="utf-8") as f:
+            # Rotazione se > 1MB
+            if os.path.exists(log_file) and os.path.getsize(log_file) > 1 * 1024 * 1024:
+                if os.path.exists(log_file + ".old"): os.remove(log_file + ".old")
+                os.rename(log_file, log_file + ".old")
+            
+            with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
         except:
             pass
@@ -423,24 +470,31 @@ class FootballPredictor:
         def _sync_task():
             try:
                 import subprocess
-                # 1. Se richiesto, facciamo prima il pull per evitare conflitti
+                # 1. Pull per evitare conflitti
                 if pull:
-                    print(f"\n{Colors.BLUE}[GIT] Sincronizzazione con il cloud (Pull)...{Colors.ENDC}", end=" ")
+                    Colors.print_info(f"[GIT] Sincronizzazione con il cloud (Pull)...")
                     subprocess.run(["git", "pull", "origin", "main"], capture_output=True)
-                    print(f"{Colors.GREEN}Fatto.{Colors.ENDC}")
-
-                # 2. Aggiunge solo i file di dati necessari
+                
+                # 2. Add
                 subprocess.run(["git", "add", "weights.json", "history.json"], capture_output=True)
+                
                 # 3. Commit
-                subprocess.run(["git", "commit", "-m", f"{message} [{datetime.now().strftime('%Y-%m-%d %H:%M')}]"], capture_output=True)
+                commit_msg = f"{message} [{datetime.now().strftime('%Y-%m-%d %H:%M')}]"
+                subprocess.run(["git", "commit", "-m", commit_msg], capture_output=True)
+                
                 # 4. Push
                 res = subprocess.run(["git", "push", "origin", "main"], capture_output=True, text=True)
+                
+                if res.returncode != 0 and "rejected" in res.stderr.lower():
+                    # Fallback: se il push è rifiutato, pull-rebase e riprova
+                    subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True)
+                    subprocess.run(["git", "push", "origin", "main"], capture_output=True)
+                
                 if res.returncode == 0:
-                    print(f"\n{Colors.GREEN}[GIT] GitHub aggiornato con successo!{Colors.ENDC}")
+                    Colors.print_success("[GIT] GitHub aggiornato!")
             except:
                 pass
         
-        # Se è un pull (all'avvio), lo facciamo bloccare per avere i dati aggiornati subito
         if pull:
             _sync_task()
         else:
@@ -1201,19 +1255,31 @@ class FootballPredictor:
             
         return {k: (v / simulations) * 100 for k, v in res_counts.items()}
 
-    def calculate_match_probabilities(self, h_avg, a_avg):
-        """Calcolo deterministico Poisson (Fallback per Monte Carlo)"""
+    def calculate_match_probabilities(self, h_avg, a_avg, lid=None):
+        """Calcolo Poisson con aggiustamento Dixon-Coles (per match a basso punteggio)"""
         probs = {
             "1": 0, "X": 0, "2": 0, 
             "O15": 0, "U15": 0, "O25": 0, "U25": 0, "O35": 0, "U35": 0, "GG": 0, "NG": 0
         }
-        # Aumentiamo il range a 8 gol per precisione estrema
+        
+        # Parametro rho per Dixon-Coles (dipendente dalla lega se disponibile)
+        rho = self.league_weights.get(lid, {}).get("rho", -0.04)
+        
+        def tau(x, y, h_lambda, a_lambda, rho_val):
+            if x == 0 and y == 0: return 1 - (h_lambda * a_lambda * rho_val)
+            if x == 0 and y == 1: return 1 + (h_lambda * rho_val)
+            if x == 1 and y == 0: return 1 + (a_lambda * rho_val)
+            if x == 1 and y == 1: return 1 - rho_val
+            return 1.0
+
         h_probs = [self.poisson_probability(h_avg, i) for i in range(9)]
         a_probs = [self.poisson_probability(a_avg, i) for i in range(9)]
         
         for i in range(9):
             for j in range(9):
-                p_score = h_probs[i] * a_probs[j]
+                # Applichiamo l'aggiustamento tau
+                p_score = h_probs[i] * a_probs[j] * tau(i, j, h_avg, a_avg, rho)
+                
                 if i > j: probs["1"] += p_score
                 elif i == j: probs["X"] += p_score
                 else: probs["2"] += p_score
@@ -1616,207 +1682,112 @@ class FootballPredictor:
                 return self.get_team_matches(f"csv_{t_name}", season)
         return data
     def analyze_match_list(self, fixtures, title="ANALISI"):
-        print(f"\n[{title.center(76)}]")
+        Colors.print_header(title)
         all_preds = []
         now = datetime.now(timezone.utc)
         history_file = "history.json"
         history = self._safe_read_json(history_file) or []
         history_index = {h.get('fid'): h for h in history if isinstance(h, dict) and h.get('fid') is not None}
-        flush_every = 25
+        
+        total_fixtures = len(fixtures)
         for i_fix, fix in enumerate(fixtures, start=1):
             try:
+                # Mostra progresso
+                self._print_progress_bar(i_fix, total_fixtures, prefix='Analisi', suffix=f'Match {i_fix}/{total_fixtures}', length=30)
+                
                 # 0. Risoluzione ID (Mapping ESPN/Diretta -> API-Sports)
                 fid_orig = fix['fixture']['id']
                 if fid_orig and (str(fid_orig).startswith("espn_") or str(fid_orig).startswith("none")):
-                    print(f"  [Mapping] Cerco ID API-Sports per {fix['teams']['home']['name']}...")
                     real_fix = self.find_api_sports_fixture(fix)
                     if real_fix:
-                        print(f"  [Mapping] Match mappato correttamente su API-Sports (ID: {real_fix['fixture']['id']})")
                         fix = real_fix
-                    else:
-                        print(f"  [Mapping] Nessun ID trovato, procedo con fallback ESPN/CSV.")
+                
                 h, a = fix['teams']['home'], fix['teams']['away']
                 fid, fdate = fix['fixture']['id'], fix['fixture']['date']
                 l_info = fix.get('league') or {"name": "Unknown", "id": 0}
                 lid = l_info.get('id', 0)
-                # Determinazione stagione dinamica basata sulla data del match e sulla lega
-                # Le leghe sudamericane/USA seguono l'anno solare, quelle europee il ciclo autunno-primavera
+                
                 match_dt = datetime.fromisoformat(fdate.replace('Z', '+00:00'))
-                is_calendar_year = lid in [71, 72, 128, 265, 242, 262, 239, 253] # Brasile, Argentina, MLS, etc.
-                if is_calendar_year:
-                    season = match_dt.year
-                else:
-                    # Ciclo europeo: se il match è prima di Luglio, la stagione è l'anno precedente
-                    season = match_dt.year if match_dt.month >= 7 else match_dt.year - 1
+                is_calendar_year = lid in [71, 72, 128, 265, 242, 262, 239, 253]
+                season = match_dt.year if is_calendar_year or match_dt.month >= 7 else match_dt.year - 1
+                
                 is_fd = str(fid).startswith("fd_")
                 is_espn = str(fid).startswith("espn_")
                 is_cup = l_info.get('type') == 'Cup' or lid in [2, 3, 4, 5, 6, 7, 8, 9, 10, 137, 848]
-                # Utilizzo API forzato per analisi (cache solo per ricerca fixtures)
-                force_refresh = True 
-                reasoning = []
+                
                 ita_date = match_dt.astimezone()
                 c_d = ita_date.strftime('%d/%m %H:%M')
-                lineups = self.get_lineups(fid) if not is_fd and not is_espn and (match_dt - now).total_seconds() / 3600 < 1.5 else []
-                std = self.get_standings(lid, season, league_name=l_info.get('name', ''))
+                
                 # Recupero dati con fallback integrato
                 h_l_data = self.get_team_matches(h['id'], season, team_name=h['name'])
                 a_l_data = self.get_team_matches(a['id'], season, team_name=a['name'])
-                # Se siamo in coppa e non abbiamo dati per la stagione corrente, proviamo la precedente per match recenti
+                
                 if is_cup:
                     if not h_l_data or not h_l_data.get('response'): h_l_data = self.get_team_matches(h['id'], season - 1, team_name=h['name'])
                     if not a_l_data or not a_l_data.get('response'): a_l_data = self.get_team_matches(a['id'], season - 1, team_name=a['name'])
-                # Filtriamo localmente le ultime 20 (Deep History)
+                
                 h_l = sorted(h_l_data['response'], key=lambda x: x['fixture']['date'], reverse=True)[:20] if h_l_data and h_l_data.get('response') else []
                 a_l = sorted(a_l_data['response'], key=lambda x: x['fixture']['date'], reverse=True)[:20] if a_l_data and a_l_data.get('response') else []
+                
                 h_s, h_c, h_gg, h_adv = self.calculate_team_stats_detailed(h['id'], h_l, team_name=h['name'])
                 a_s, a_c, a_gg, a_adv = self.calculate_team_stats_detailed(a['id'], a_l, team_name=a['name'])
-                # Combiniamo le statistiche avanzate per il match
-                match_adv = {
-                    "home": {**h_adv, "name": h['name']},
-                    "away": {**a_adv, "name": a['name']}
-                }
-                exp_h = (h_s + a_c) / 2
-                exp_a = (a_s + h_c) / 2
-                # Aggiungiamo un micro-bias analitico se mancano dati reali
-                if not h_l and not a_l:
-                    # Invece di random, usiamo un leggero vantaggio casa predefinito (1.05x / 0.95x)
-                    exp_h *= 1.05
-                    exp_a *= 0.95
-                h_xg, a_xg, h_xga, a_xga = 0, 0, 0, 0
-                # 1. Tenta API-Sports (solo se non è un match Football-Data o ESPN)
+                
+                match_adv = {"home": {**h_adv, "name": h['name']}, "away": {**a_adv, "name": a['name']}}
+                exp_h, exp_a = (h_s + a_c) / 2, (a_s + h_c) / 2
+                
+                # Fallback xG
+                h_xg, a_xg = 0, 0
                 if not is_fd and not is_espn:
-                    stats_data = self._get("fixtures/statistics", {"fixture": fid}, use_cache=not force_refresh)
+                    stats_data = self._get("fixtures/statistics", {"fixture": fid}, use_cache=True)
                     if stats_data and stats_data['response']:
                         for s_entry in stats_data['response']:
                             xg_val = next((item['value'] for item in s_entry['statistics'] if item['type'] == "expected_goals"), 0)
                             if s_entry['team']['id'] == h['id']: h_xg = float(xg_val or 0)
                             else: a_xg = float(xg_val or 0)
-                        h_xga, a_xga = a_xg, h_xg
-                # 2. Fallback su Diretta.it se API fallisce o non ha xG (anche per FD ed ESPN)
+                
                 if h_xg == 0:
-                    # Cerchiamo il match su Diretta (scansione fino a 7gg)
-                    match_dt_date = datetime.fromisoformat(fdate.replace('Z', '+00:00')).date()
-                    day_diff = (match_dt_date - datetime.now().date()).days
+                    day_diff = (match_dt.date() - datetime.now().date()).days
                     if abs(day_diff) <= 7:
-                        d_matches = self.diretta.get_matches(day_diff)
-                        d_id = None
-                        for dm in d_matches:
-                            # Matching più robusto per il fallback
-                            h_dm, a_dm = dm['home'].lower(), dm['away'].lower()
-                            h_api, a_api = h['name'].lower(), a['name'].lower()
-                            if (h_api in h_dm or h_dm in h_api) and (a_api in a_dm or a_dm in a_api):
-                                d_id = dm['id']
-                                break
+                        d_id = self.diretta.find_match_id(h['name'], a['name'], fdate)
                         if d_id:
-                            print(f"  [Diretta] Recupero xG e statistiche live per {h['name']}...")
                             d_stats = self.diretta.get_match_stats(d_id)
                             if d_stats:
                                 h_xg, a_xg = d_stats['home']['xg'], d_stats['away']['xg']
-                                h_xga, a_xga = a_xg, h_xg
-                                # Possiamo anche arricchire i dati dei team se mancano
-                                if not h_l: h_adv.update(d_stats['home'])
-                                if not a_l: a_adv.update(d_stats['away'])
-                            # Info Extra: Arbitro, Meteo, Stadio
-                            d_info = self.diretta.get_match_info_extra(d_id)
-                            if d_info:
-                                if d_info["referee"] != "N/D": fix['fixture']['referee'] = d_info["referee"]
-                                if d_info["venue"] != "N/D": fix['fixture'].setdefault('venue', {})['name'] = d_info["venue"]
-                                if d_info["weather"] != "N/D": reasoning.append(f"Meteo: {d_info['weather']}")
+                
                 if h_xg > 0 and a_xg > 0:
-                    exp_h = (exp_h * 0.6) + ((h_xg + a_xga) / 2 * 0.4)
-                    exp_a = (exp_a * 0.6) + ((a_xg + h_xga) / 2 * 0.4)
-                p_probs = self.calculate_match_probabilities(exp_h, exp_a)
-                g_avg = (h_s + h_c + a_s + a_c) / 2
-                g_str = f"{g_avg:.1f}" if h_l and a_l else "N/D"
+                    exp_h = (exp_h * 0.6) + ((h_xg + a_xg) / 2 * 0.4)
+                    exp_a = (exp_a * 0.6) + ((a_xg + h_xg) / 2 * 0.4)
+                
+                p_probs = self.calculate_match_probabilities(exp_h, exp_a, lid=lid)
                 h2h = self.get_h2h(h['id'], a['id']) if not is_fd and not is_espn else 50
-                # Analisi Infortuni e Fatica
                 h_f, a_f = self.get_fatigue(h['id']) if not is_fd and not is_espn else 0, self.get_fatigue(a['id']) if not is_fd and not is_espn else 0
                 h_i, a_i = self.get_injuries(fid, h['id']) if not is_fd and not is_espn else 0, self.get_injuries(fid, a['id']) if not is_fd and not is_espn else 0
-                # Arbitro e Stadio
-                ref_info = self.get_referee_stats(fix['fixture'].get('referee'))
-                venue = fix['fixture'].get('venue', {}).get('name', 'N/D')
-                # Strength con pesi bilanciati
-                hs = self.calculate_strength(h['id'], h_l, std, True, h2h, h_f, h_i, is_cup, lid, team_name=h['name'])
-                as_ = self.calculate_strength(a['id'], a_l, std, False, 100-h2h, a_f, a_i, is_cup, lid, team_name=a['name'])
-                # Controllo qualità dati
-                data_warning = ""
-                if not h_l and not a_l and not std:
-                    data_warning = " (ATTENZIONE: Dati storici insufficienti)"
-                    # Nessun bias casuale: usiamo i valori calcolati hs/as_ puri
-                    pass
-                # Mix Probabilità: Monte Carlo (xG + Stats) + Forza Relativa (Smart Brain)
-                # La simulazione Monte Carlo è il cuore del nuovo modello "Future"
+                
+                hs = self.calculate_strength(h['id'], h_l, std if 'std' in locals() else None, True, h2h, h_f, h_i, is_cup, lid, team_name=h['name'])
+                as_ = self.calculate_strength(a['id'], a_l, std if 'std' in locals() else None, False, 100-h2h, a_f, a_i, is_cup, lid, team_name=a['name'])
+                
                 mc_probs = self.monte_carlo_simulation(exp_h, exp_a)
-                # Forza Relativa (Smart Brain) components normalized to 100%
-                sb_x = 22.0 # Fattore X base leggermente ridotto per favorire 12
-                sb_h = (hs / (hs + as_)) * 100
-                sb_a = (as_ / (hs + as_)) * 100
+                sb_x = 22.0
+                sb_h, sb_a = (hs / (hs + as_)) * 100, (as_ / (hs + as_)) * 100
                 total_sb = sb_h + sb_a + sb_x
-                # Mix finale bilanciato (40% Monte Carlo, 60% Smart Brain)
+                
                 p1 = (mc_probs["1"] * 0.40) + ((sb_h / total_sb) * 100 * 0.60)
                 p2 = (mc_probs["2"] * 0.40) + ((sb_a / total_sb) * 100 * 0.60)
                 px = (mc_probs["X"] * 0.40) + ((sb_x / total_sb) * 100 * 0.60)
-                # Normalizzazione finale per sicurezza
                 total_p = p1 + p2 + px
                 p1, p2, px = (p1/total_p)*100, (p2/total_p)*100, (px/total_p)*100
-                # Aggiorniamo p_probs con i risultati della simulazione MC
                 p_probs.update(mc_probs)
-                # Recupero quote reali
+                
                 real_odds = self.get_odds(fid, h_name=h['name'], a_name=a['name'], date_str=fdate)
-                if not any(real_odds.values()):
-                    d_id = self.diretta.find_match_id(h['name'], a['name'], fdate)
-                    if d_id:
-                        d_odds = self.diretta.get_odds(d_id)
-                        if d_odds:
-                            print(f"  [Diretta] Quote reali 1X2 recuperate: {d_odds['1']} - {d_odds['X']} - {d_odds['2']}")
-                            real_odds["1X2"] = {"Home": d_odds["1"], "Draw": d_odds["X"], "Away": d_odds["2"]}
                 has_real_odds = any(v for v in real_odds.values() if v)
-                if not has_real_odds:
-                    reasons = []
-                    reasons.append("API-Sports sospesa" if self.api_suspended else "API-Sports N/D")
-                    reasons.append("Diretta N/D")
-                    msg = f"Quote reali non disponibili ({', '.join(reasons)}). EV=SIM."
-                    print(f"  {Colors.YELLOW}[QUOTE] {msg}{Colors.ENDC}")
-                    try:
-                        self._log_error(f"[QUOTE] {h['name']} vs {a['name']} {fdate[:10]}: {msg}")
-                    except:
-                        pass
+                
                 diff = hs - as_
-                value_bets = []
-                def calc_kelly(p, o):
-                    if o <= 1: return 0
-                    k = (p/100 * o - 1) / (o - 1)
-                    return max(0, k * 0.1) # Kelly frazionata 10% per prudenza
-                if real_odds["1X2"]:
-                    ev1 = (p1/100 * real_odds["1X2"].get("Home", 1)) - 1
-                    evx = (px/100 * real_odds["1X2"].get("Draw", 1)) - 1
-                    ev2 = (p2/100 * real_odds["1X2"].get("Away", 1)) - 1
-                    if ev1 > 0.10: 
-                        k1 = calc_kelly(p1, real_odds["1X2"].get("Home", 1))
-                        value_bets.append(f"1 (EV: {ev1*100:+.1f}%, Kelly: {k1*100:.1f}%)")
-                    if evx > 0.10: 
-                        kx = calc_kelly(px, real_odds["1X2"].get("Draw", 1))
-                        value_bets.append(f"X (EV: {evx*100:+.1f}%, Kelly: {kx*100:.1f}%)")
-                    if ev2 > 0.10: 
-                        k2 = calc_kelly(p2, real_odds["1X2"].get("Away", 1))
-                        value_bets.append(f"2 (EV: {ev2*100:+.1f}%, Kelly: {k2*100:.1f}%)")
                 preds = {}
-                is_trap = False
-                if diff > 20 and (h_f < 0 or h_i < -10 or a_f > 0): is_trap = True
-                if abs(diff) < 10: reasoning.append("Match molto equilibrato.")
-                elif diff > 25: reasoning.append(f"Divario tecnico pro {h['name']}.")
-                elif diff < -25: reasoning.append(f"Divario tecnico pro {a['name']}.")
-                if is_cup: reasoning.append("Coppa: esperienza conta più della classifica.")
-                if h_f < 0: reasoning.append(f"Fatica per {h['name']}.")
-                if a_f < 0: reasoning.append(f"Fatica per {a['name']}.")
-                if ref_info['cards'] > 5: reasoning.append(f"Arbitro severo ({ref_info['cards']:.1f} cart/m).")
-                if is_trap: reasoning.append("ATTENZIONE: Match TRAPPOLA.")
-                print(f"- {Colors.BOLD}{h['name']}{Colors.ENDC} vs {Colors.BOLD}{a['name']}{Colors.ENDC} ({Colors.CYAN}{c_d}{Colors.ENDC})")
-                if is_trap: print(f"  {Colors.RED}⚠️ TRAPPOLA{Colors.ENDC}")
-                # Calcoliamo i tre livelli
+                is_trap = diff > 20 and (h_f < 0 or h_i < -10 or a_f > 0)
+                
                 for lvl in ["FACILE", "MEDIA", "DIFFICILE"]:
                     preds[lvl] = self._get_pred(lvl, p1, p2, px, p_probs, real_odds, is_trap, adv_stats=match_adv)
-                # Determiniamo dinamicamente qual è la scelta migliore basata sullo score matematico
+                
                 best_lvl = "MEDIA"
                 max_score = -999
                 for lvl in ["FACILE", "MEDIA", "DIFFICILE"]:
@@ -1824,109 +1795,90 @@ class FootballPredictor:
                     if lvl == "MEDIA": score *= 1.1
                     elif lvl == "DIFFICILE": score *= 1.2
                     if score > max_score:
-                        max_score = score
-                        best_lvl = lvl
+                        max_score, best_lvl = score, lvl
+                
+                has_value = True
                 if has_real_odds:
                     if preds[best_lvl]['ev'] < -0.15 or preds[best_lvl]['q'] < 1.15:
                         has_value = any(preds[l]['ev'] > -0.15 for l in ["FACILE", "MEDIA", "DIFFICILE"])
-                    else:
-                        has_value = True
-                else:
-                    has_value = True
+                
+                # Output formattato
+                print(f"\n{Colors.WHITE}{'─'*60}{Colors.ENDC}")
+                print(f"{Colors.BOLD}{h['name']} vs {a['name']}{Colors.ENDC} ({Colors.CYAN}{c_d}{Colors.ENDC})")
+                if is_trap: print(f"  {Colors.RED}⚠️ TRAPPOLA{Colors.ENDC}")
+                
                 for lvl in ["FACILE", "MEDIA", "DIFFICILE"]:
                     p_info = preds[lvl]
-                    cons = ""
-                    if lvl == best_lvl and has_value:
-                        cons = f" {Colors.GREEN}(CONSIGLIATA)*{Colors.ENDC}"
+                    cons = f" {Colors.GREEN}★ CONSIGLIATA ★{Colors.ENDC}" if lvl == best_lvl and has_value else ""
+                    
+                    # Colore per la quota basato sul valore
+                    q_color = Colors.GREEN if p_info.get('ev', 0) > 0.05 else (Colors.YELLOW if p_info.get('ev', 0) > 0 else Colors.WHITE)
+                    
                     if has_real_odds:
-                        if p_info.get('stake', 0) > 0:
-                            stake_str = f"{Colors.GREEN}{p_info['stake']:.1f}%{Colors.ENDC}"
-                            res_str = f"{Colors.BOLD}{p_info['res']}{Colors.ENDC}"
-                        else:
-                            stake_str = "0%"
-                            res_str = f"{p_info['res']} (NO VALORE)" if p_info['ev'] < -0.10 else p_info['res']
+                        stake_str = f"{Colors.GREEN}{p_info['stake']:.1f}%{Colors.ENDC}" if p_info.get('stake', 0) > 0 else f"{Colors.GRAY}0%{Colors.ENDC}"
+                        res_str = f"{Colors.BOLD}{p_info['res']}{Colors.ENDC}" if p_info.get('stake', 0) > 0 else f"{Colors.GRAY}{p_info['res']} (NO VALORE){Colors.ENDC}"
                     else:
-                        sim_stake = (p_info['p'] - 45) / 5 if p_info['p'] > 45 else 0
-                        if p_info.get('stake', 0) <= 0 and sim_stake > 0:
-                            p_info['stake'] = sim_stake
-                        # Simulazione Bankroll per il livello corrente
-                        b_sim = self.bankroll_simulation(p_info['p'], p_info['q'])
-                        risk_str = f" [Rischio: {b_sim['risk_of_ruin']:.1f}%]"
-                        stake_str = f"{Colors.YELLOW}{p_info.get('stake', 0):.1f}% (SIM){Colors.ENDC}{risk_str}" if p_info.get('stake', 0) > 0 else "0%"
+                        sim_stake = max(0, (p_info['p'] - 45) / 5)
+                        risk_str = f" {Colors.GRAY}[Rischio: {self.bankroll_simulation(p_info['p'], p_info['q'])['risk_of_ruin']:.1f}%]{Colors.ENDC}"
+                        stake_str = f"{Colors.YELLOW}{sim_stake:.1f}% (SIM){Colors.ENDC}{risk_str}"
                         res_str = f"{Colors.BOLD}{p_info['res']}{Colors.ENDC}"
-                    print(f"  {lvl:<9}: {res_str:<35} @{p_info['q']:.2f} ({stake_str}){cons}")
-                print(f"  Prob: {Colors.BLUE}1:{p1:.0f}% X:{px:.0f}% 2:{p2:.0f}%{Colors.ENDC} | Smart Brain: {Colors.CYAN}{hs:.1f} vs {as_:.1f}{Colors.ENDC}")
-                print("-" * 50)
+                    
+                    print(f"  {lvl:<9}: {res_str:<35} {q_color}@{p_info['q']:.2f}{Colors.ENDC} ({stake_str}){cons}")
+                
+                print(f"  Prob: {Colors.BLUE}1:{p1:.0f}% X:{px:.0f}% 2:{p2:.0f}%{Colors.ENDC} | Brain: {Colors.CYAN}{hs:.1f} vs {as_:.1f}{Colors.ENDC}")
+                print(f"{Colors.WHITE}{'─'*60}{Colors.ENDC}")
+                
                 p_data = {
-                    "m": f"{h['name']} vs {a['name']}", 
-                    "r": preds[best_lvl]["res"], 
-                    "q": preds[best_lvl]["q"], 
-                    "d": abs(diff), 
-                    "lvl": best_lvl,
-                    "fid": fid,
-                    "lid": lid,
-                    "league": l_info.get('name', ''),
-                    "h_id": h['id'],
-                    "a_id": a['id'],
-                    "exp_h": exp_h,
-                    "exp_a": exp_a,
-                    "hs": hs,
-                    "as": as_,
-                    "date": fix['fixture']['date'][:10],
-                    "ev": preds[best_lvl].get('ev', 0),
-                    "stake": preds[best_lvl].get('stake', 0),
-                    "p": preds[best_lvl].get('p', 0),
+                    "m": f"{h['name']} vs {a['name']}", "r": preds[best_lvl]["res"], "q": preds[best_lvl]["q"], 
+                    "d": abs(diff), "lvl": best_lvl, "fid": fid, "lid": lid, "league": l_info.get('name', ''),
+                    "h_id": h['id'], "a_id": a['id'], "exp_h": exp_h, "exp_a": exp_a, "hs": hs, "as": as_,
+                    "date": fix['fixture']['date'][:10], "ev": preds[best_lvl].get('ev', 0),
+                    "stake": preds[best_lvl].get('stake', 0), "p": preds[best_lvl].get('p', 0),
                     "is_real_odds": bool(preds[best_lvl].get('is_real', False))
                 }
                 self.session_preds.append(p_data)
-                if has_value and p_data["stake"] > 0:
-                    all_preds.append(p_data)
-                if p_data["stake"] >= 4.0 or p_data["ev"] >= 0.08:
-                    self.session_top_preds.append(p_data)
+                if has_value and p_data["stake"] > 0: all_preds.append(p_data)
+                if p_data["stake"] >= 4.0 or p_data["ev"] >= 0.08: self.session_top_preds.append(p_data)
+                
+                # Aggiornamento history
+                h_entry = history_index.get(fid)
+                if not h_entry:
+                    h_entry = {"fid": fid, "m": f"{h['name']} vs {a['name']}", "date": match_dt.strftime('%Y-%m-%d'), "h_id": h['id'], "a_id": a['id']}
+                    history.append(h_entry)
+                    history_index[fid] = h_entry
+                h_entry.update({'r_pred': preds[best_lvl]["res"] if has_value else "N/D", 'hs': hs, 'as': as_, 'exp_h': exp_h, 'exp_a': exp_a, 'processed': False})
+                
+                if i_fix % 25 == 0: self._safe_write_json(history_file, history)
+                
             except Exception as e:
-                h_name = fix.get('teams', {}).get('home', {}).get('name', 'Unknown')
-                a_name = fix.get('teams', {}).get('away', {}).get('name', 'Unknown')
-                print(f"Errore nell'analisi del match {h_name} vs {a_name}: {e}")
+                self._log_error(f"Errore analisi match: {e}")
                 continue
-            h_entry = history_index.get(fid)
-            if h_entry:
-                h_entry['r_pred'] = preds[best_lvl]["res"] if has_value else "N/D"
-                h_entry['hs'] = hs
-                h_entry['as'] = as_
-                h_entry['exp_h'] = exp_h
-                h_entry['exp_a'] = exp_a
-                h_entry['processed'] = False 
-                h_entry['date'] = match_dt.strftime('%Y-%m-%d')
-            else:
-                h_entry = {
-                    "fid": fid,
-                    "m": f"{h['name']} vs {a['name']}",
-                    "r_pred": preds[best_lvl]["res"] if has_value else "N/D",
-                    "date": match_dt.strftime('%Y-%m-%d'), 
-                    "processed": False,
-                    "h_id": h['id'],
-                    "a_id": a['id'],
-                    "exp_h": exp_h,
-                    "exp_a": exp_a,
-                    "hs": hs,
-                    "as": as_
-                }
-                history.append(h_entry)
-                history_index[fid] = h_entry
-            if i_fix % flush_every == 0:
-                self._safe_write_json(history_file, history)
-            log_key = f"{fid}-{match_dt.strftime('%Y-%m-%d')}"
-            if log_key not in self.session_logged:
-                self.session_logged.add(log_key)
-                try:
-                    with file_lock:
-                        with open("pronostici.txt", "a", encoding="utf-8") as f:
-                            ev_str = f"{p_data['ev']*100:+.1f}%" if p_data.get("is_real_odds") else "SIM"
-                            f.write(f"{match_dt.strftime('%Y-%m-%d')} | {p_data.get('league','')[:18]:<18} | {h['name']} vs {a['name']} | {best_lvl} | {p_data['r']} @{p_data['q']:.2f} | P:{p_data.get('p',0):.0f}% | Stake:{p_data['stake']:.1f}% | EV:{ev_str}\n")
-                except:
-                    pass
+        
         self._safe_write_json(history_file, history)
-        if all_preds: self.show_final_slip(all_preds)
+        if all_preds: 
+            self.show_final_slip(all_preds)
+            self._show_smart_tips(all_preds)
+
+    def _show_smart_tips(self, preds):
+        """Mostra consigli intelligenti basati sull'analisi corrente"""
+        Colors.print_header("SMART TIPS & INSIGHTS")
+        
+        # 1. Trova il match con il valore più alto
+        best_ev = max(preds, key=lambda x: x.get('ev', 0)) if preds else None
+        if best_ev and best_ev.get('ev', 0) > 0.15:
+            print(f"🔥 {Colors.BOLD}VALORE MASSIMO:{Colors.ENDC} {best_ev['m']} -> {best_ev['r']} @{best_ev['q']:.2f} (EV: {best_ev['ev']*100:.1f}%)")
+        
+        # 2. Match con probabilità più alta
+        best_prob = max(preds, key=lambda x: x.get('p', 0)) if preds else None
+        if best_prob and best_prob.get('p', 0) > 75:
+            print(f"🛡️ {Colors.BOLD}CASSAFORTE:{Colors.ENDC} {best_prob['m']} -> {best_prob['r']} @{best_prob['q']:.2f} (Prob: {best_prob['p']:.0f}%)")
+        
+        # 3. Consiglio per raddoppio
+        raddoppio = [p for p in preds if 1.80 <= p['q'] <= 2.20 and p.get('ev', 0) > 0.05]
+        if raddoppio:
+            best_rad = max(raddoppio, key=lambda x: x['p'])
+            print(f"💰 {Colors.BOLD}PROPOSTA RADDOPPIO:{Colors.ENDC} {best_rad['m']} -> {best_rad['r']} @{best_rad['q']:.2f}")
+
     def bankroll_simulation(self, p_win, odd, bankroll=1000, simulations=350):
         """
         Simula il rischio del bankroll su 1000 iterazioni (Python Puro).
@@ -2073,6 +2025,65 @@ class FootballPredictor:
         # DIFFICILE: Quota > 2.10. Per chi cerca il colpo o la sorpresa.
         res_difficile = pick_best(25, 2.10, max_q=5.0, min_ev=0.02, exclude_res=[res_facile["res"], res_media["res"]])
         if lvl == "DIFFICILE": return res_difficile
+    def show_performance_stats(self):
+        """Mostra statistiche di performance dell'AI basate su history.json"""
+        history = self._safe_read_json("history.json") or []
+        processed = [h for h in history if h.get('processed')]
+        
+        if not processed:
+            Colors.print_warning("Nessun dato processato disponibile per le statistiche.")
+            return
+            
+        total = len(processed)
+        correct = sum(1 for h in processed if h.get('real_gh') is not None and self._check_pred_correct(h['r_pred'], h['real_gh'], h['real_ga']))
+        accuracy = (correct / total) * 100 if total > 0 else 0
+        
+        Colors.print_header("PERFORMANCE AI")
+        print(f"Match Analizzati: {total}")
+        print(f"Match Indovinati: {correct}")
+        print(f"Accuratezza: {Colors.GREEN if accuracy > 55 else Colors.YELLOW}{accuracy:.1f}%{Colors.ENDC}")
+        
+        # Analisi per mercato
+        markets = {}
+        for h in processed:
+            pred = h.get('r_pred', 'N/D')
+            if pred == 'N/D' or h.get('real_gh') is None: continue
+            
+            m_type = "1X2"
+            if any(x in pred for x in ["1X", "X2", "12"]): m_type = "DC"
+            elif "OVER" in pred or "UNDER" in pred: m_type = "U/O"
+            elif "GOL" in pred: m_type = "GG/NG"
+            
+            if m_type not in markets: markets[m_type] = {"total": 0, "correct": 0}
+            markets[m_type]["total"] += 1
+            if self._check_pred_correct(pred, h['real_gh'], h['real_ga']):
+                markets[m_type]["correct"] += 1
+        
+        print("\n--- PERFORMANCE PER MERCATO ---")
+        for m, stats in markets.items():
+            acc = (stats['correct'] / stats['total']) * 100
+            print(f"{m:<10}: {acc:.1f}% ({stats['correct']}/{stats['total']})")
+
+    def _check_pred_correct(self, pred, gh, ga):
+        """Helper per verificare se un pronostico è corretto"""
+        if gh is None or ga is None: return False
+        real_res = "1" if gh > ga else ("2" if gh < ga else "X")
+        pred = str(pred).upper()
+        
+        if pred == real_res: return True
+        if pred == "1X" and real_res in ["1", "X"]: return True
+        if pred == "X2" and real_res in ["X", "2"]: return True
+        if pred == "12" and real_res in ["1", "2"]: return True
+        if pred == "GOL": return (gh > 0 and ga > 0)
+        if pred == "NO GOL": return (gh == 0 or ga == 0)
+        if "OVER" in pred:
+            try: return (gh + ga) > float(pred.split()[-1])
+            except: pass
+        if "UNDER" in pred:
+            try: return (gh + ga) < float(pred.split()[-1])
+            except: pass
+        return False
+
     def save_top_pronostici(self):
         """Genera il file PRONOSTICI_TOP.txt con i migliori match della sessione"""
         source = self.session_top_preds if self.session_top_preds else self.session_preds
@@ -3024,16 +3035,23 @@ class FootballPredictor:
             "olanda: eredivisie", "portogallo: liga portugal"
         ]
         
-        for offset in offsets:
-            day_matches = self.diretta.get_matches(day_offset=offset)
-            for m in day_matches:
-                m_id = m['id']
-                if m_id not in seen_ids:
-                    # Priorità ai campionati top
-                    is_top = any(m['league'].lower().startswith(tl) for tl in top_leagues)
-                    m['is_top'] = is_top
-                    all_matches.append(m)
-                    seen_ids.add(m_id)
+        import concurrent.futures
+        
+        def fetch_day_matches(offset):
+            return self.diretta.get_matches(day_offset=offset)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(offsets)) as executor:
+            future_to_offset = {executor.submit(fetch_day_matches, off): off for off in offsets}
+            for future in concurrent.futures.as_completed(future_to_offset):
+                day_matches = future.result()
+                for m in day_matches:
+                    m_id = m['id']
+                    if m_id not in seen_ids:
+                        # Priorità ai campionati top
+                        is_top = any(m['league'].lower().startswith(tl) for tl in top_leagues)
+                        m['is_top'] = is_top
+                        all_matches.append(m)
+                        seen_ids.add(m_id)
         
         # Ordiniamo: prima i top leagues, poi il resto
         all_matches.sort(key=lambda x: (not x['is_top'], x['league'], x['time']))
@@ -3151,10 +3169,11 @@ if __name__ == "__main__":
                     p.analyze_all_matches()
             elif main_choice == "3":
                 print(f"\n{Colors.YELLOW}--- AI & REALTÀ ---{Colors.ENDC}")
-                print("1. MOSTRA REALTÀ (Risultati) | 2. AUTO-LEARN (Background) | 0. TORNA")
+                print("1. MOSTRA REALTÀ (Risultati) | 2. AUTO-LEARN (Background) | 3. PERFORMANCE STATS | 0. TORNA")
                 ac = input("Scegli: ").strip().lower()
                 if ac == '1': p.show_reality()
                 elif ac == '2': p.run_auto_learning(manual=True)
+                elif ac == '3': p.show_performance_stats()
             elif main_choice == "4":
                 print(f"\n{Colors.PURPLE}--- TOP & ROUTINE ---{Colors.ENDC}")
                 print("1. SALVA TOP PRONOSTICI | 2. ESEGUI ROUTINE COMPLETA (9) | 0. TORNA")
