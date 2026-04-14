@@ -57,8 +57,9 @@ class DirettaScraper:
     def __init__(self):
         self.headers = {
             'x-fsign': 'SW9D1eZo',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.diretta.it/'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': 'https://www.diretta.it/',
+            'Origin': 'https://www.diretta.it'
         }
         self.base_url = "https://www.diretta.it/x/feed"
         self.SEP1 = '÷' 
@@ -70,8 +71,23 @@ class DirettaScraper:
         if time.time() - self._last_fsign_update < 3600: return # Max 1 volta all'ora
         try:
             r = requests.get("https://www.diretta.it/", headers={'User-Agent': self.headers['User-Agent']}, timeout=10)
-            # Cerchiamo fsign = "..."
+            # Cerchiamo fsign = "..." (vecchio formato)
             match = re.search(r'fsign\s*=\s*"([^"]+)"', r.text)
+            if match:
+                self.headers['x-fsign'] = match.group(1)
+                self._last_fsign_update = time.time()
+                return
+                
+            # Nuovo formato: ["6_100_SW9D1eZo", ...]
+            match = re.search(r'["\']6_100_([a-zA-Z0-9]{8})["\']', r.text)
+            if match:
+                self.headers['x-fsign'] = match.group(1)
+                self._last_fsign_update = time.time()
+                # print(f"  [DEBUG] Nuovo fsign rilevato: {match.group(1)}")
+                return
+                
+            # Fallback generico per stringhe di 8 caratteri in defaultTopLeagues
+            match = re.search(r'defaultTopLeagues\s*=\s*\[\s*["\'][^"\']+_([^"\']+)["\']', r.text)
             if match:
                 self.headers['x-fsign'] = match.group(1)
                 self._last_fsign_update = time.time()
@@ -135,16 +151,20 @@ class DirettaScraper:
     def get_odds(self, match_id):
         """Tenta di recuperare le quote per un match ID da Diretta.it (Multi-Feed)"""
         # Formati feed diversi per quote (it_1, it_2, it_3, etc.)
+        self._refresh_fsign()
         urls = [
             f"{self.base_url}/f_od_1_{match_id}_it_1",
             f"{self.base_url}/f_od_2_{match_id}_it_1",
             f"{self.base_url}/f_od_1_{match_id}_it_2",
-            f"{self.base_url}/f_od_1_{match_id}_en_1"
+            f"{self.base_url}/f_od_1_{match_id}_en_1",
+            f"{self.base_url}/f_od_1_{match_id}_it_3"
         ]
         for url in urls:
             try:
                 response = requests.get(url, headers=self.headers, timeout=10)
-                if response.status_code != 200 or not response.text: continue
+                if response.status_code != 200 or not response.text or len(response.text) < 10: 
+                    continue
+                
                 sections = response.text.split('~')
                 for section in sections:
                     if section.startswith('OD' + self.SEP1):
@@ -154,9 +174,11 @@ class DirettaScraper:
                             if p.startswith('OA' + self.SEP1): o1 = float(p[3:])
                             if p.startswith('OB' + self.SEP1): ox = float(p[3:])
                             if p.startswith('OC' + self.SEP1): o2 = float(p[3:])
+                        
                         if o1 > 0 and ox > 0 and o2 > 0:
                             return {"1": o1, "X": ox, "2": o2}
-            except: continue
+            except:
+                continue
         return None
     def get_match_info_extra(self, match_id):
         """Recupera info extra: arbitro, stadio, meteo da Diretta.it"""

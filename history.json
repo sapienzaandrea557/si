@@ -17691,5 +17691,18 @@
         "exp_a": 1.15,
         "hs": 88.5,
         "as": 58.0
+    },
+    {
+        "fid": "d_pMoNkyle",
+        "m": "Al Qadsiah vs Al Shabab",
+        "date": "2026-04-14",
+        "h_id": "d_pMoNkyle_h",
+        "a_id": "d_pMoNkyle_a",
+        "r_pred": "OVER 21.5 FALLI",
+        "hs": 72.25,
+        "as": 63.25,
+        "exp_h": 1.15,
+        "exp_a": 1.15,
+        "processed": false
     }
 ]
